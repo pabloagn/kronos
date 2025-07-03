@@ -4,7 +4,6 @@ use kronos_ipc::TimerState;
 use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-// use std::time::Duration as StdDuration;
 use tachyonfx::{fx, EffectManager, Motion};
 
 #[derive(Serialize, Deserialize)]
@@ -27,6 +26,8 @@ pub struct App {
     #[serde(skip)]
     pub should_quit: bool,
     pub stats: Stats,
+    #[serde(skip)]
+    pub category_list_state: ratatui::widgets::ListState,
 }
 
 pub fn default_effect_manager() -> EffectManager<u32> {
@@ -48,6 +49,7 @@ impl Clone for App {
             effect_manager: EffectManager::default(),
             should_quit: self.should_quit,
             stats: self.stats.clone(),
+            category_list_state: self.category_list_state.clone(),
         }
     }
 }
@@ -59,9 +61,39 @@ pub enum AppMode {
     AddingTask,
     EditingTime(usize),
     SelectingPreset(usize),
+    SelectingCategory(usize),
     StartupAnimation,
     ShowStats,
     ShowHelp,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
+pub enum TaskCategory {
+    Work,
+    Personal,
+    Study,
+    Exercise,
+    Other(String),
+}
+
+impl TaskCategory {
+    pub fn to_string(&self) -> String {
+        match self {
+            TaskCategory::Work => "Work".to_string(),
+            TaskCategory::Personal => "Personal".to_string(),
+            TaskCategory::Study => "Study".to_string(),
+            TaskCategory::Exercise => "Exercise".to_string(),
+            TaskCategory::Other(s) => s.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum Priority {
+    Low,
+    Medium,
+    High,
+    Urgent,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -77,29 +109,12 @@ pub struct Task {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum TaskCategory {
-    Work,
-    Personal,
-    Study,
-    Exercise,
-    Other(String),
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub enum Priority {
-    Low,
-    Medium,
-    High,
-    Urgent,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
 pub struct Stats {
     pub total_completed: u32,
     pub total_time_worked: Duration,
     pub daily_streak: u32,
     pub last_active_date: DateTime<Local>,
-    pub tasks_by_category: HashMap<String, u32>,
+    pub tasks_by_category: HashMap<TaskCategory, u32>,
 }
 
 impl Default for Stats {
@@ -187,7 +202,7 @@ impl App {
         presets.insert("Pomodoro".to_string(), 25);
         presets.insert("Short Break".to_string(), 5);
         presets.insert("Long Break".to_string(), 15);
-        Self {
+        let mut app = Self {
             tasks: vec![],
             selected_task: 0,
             mode: AppMode::StartupAnimation,
@@ -200,7 +215,10 @@ impl App {
             effect_manager: EffectManager::default(),
             should_quit: false,
             stats: Stats::default(),
-        }
+            category_list_state: ratatui::widgets::ListState::default(),
+        };
+        app.trigger_startup_animation();
+        app
     }
 
     pub fn add_task(&mut self, description: String) {
@@ -228,82 +246,46 @@ impl App {
     }
 
     pub fn toggle_selected_task_completion(&mut self) {
+        let mut task_to_update: Option<Task> = None;
+
         if let Some(task) = self.tasks.get_mut(self.selected_task) {
             task.completed = !task.completed;
             if task.completed {
                 task.completed_at = Some(Local::now());
-                // Store the data we need before dropping the mutable borrow
-                let elapsed = task.timer.get_elapsed();
-                let category = task.category.clone();
+                task_to_update = Some(task.clone());
             } else {
                 task.completed_at = None;
-                return; // Early return if uncompleting
             }
         }
 
-        // Now we can safely call update_stats without borrow issues
-        if self.tasks[self.selected_task].completed {
-            self.stats.total_completed += 1;
-            self.stats.total_time_worked =
-                self.stats.total_time_worked + self.tasks[self.selected_task].timer.get_elapsed();
-
-            // Update category stats
-            let category_name = match &self.tasks[self.selected_task].category {
-                TaskCategory::Work => "Work",
-                TaskCategory::Personal => "Personal",
-                TaskCategory::Study => "Study",
-                TaskCategory::Exercise => "Exercise",
-                TaskCategory::Other(name) => name,
-            };
-            *self
-                .stats
-                .tasks_by_category
-                .entry(category_name.to_string())
-                .or_insert(0) += 1;
-
-            // Update streak
-            let today = Local::now().date_naive();
-            let last_active = self.stats.last_active_date.date_naive();
-            if today == last_active {
-                // Same day, no change
-            } else if today.signed_duration_since(last_active).num_days() == 1 {
-                self.stats.daily_streak += 1;
-            } else {
-                self.stats.daily_streak = 1;
-            }
-            self.stats.last_active_date = Local::now();
+        if let Some(task) = task_to_update {
+            self.update_stats(task);
         }
     }
 
-    pub fn update_stats(&mut self, task: &Task) {
-        self.stats.total_completed += 1;
-        self.stats.total_time_worked = self.stats.total_time_worked + task.timer.get_elapsed();
+    pub fn update_stats(&mut self, task: Task) {
+        if task.completed {
+            self.stats.total_completed += 1;
+            self.stats.total_time_worked =
+                self.stats.total_time_worked + task.timer.get_elapsed();
 
-        // Update category stats
-        let category_name = match &task.category {
-            TaskCategory::Work => "Work",
-            TaskCategory::Personal => "Personal",
-            TaskCategory::Study => "Study",
-            TaskCategory::Exercise => "Exercise",
-            TaskCategory::Other(name) => name,
-        };
-        *self
-            .stats
-            .tasks_by_category
-            .entry(category_name.to_string())
-            .or_insert(0) += 1;
+            *self
+                .stats
+                .tasks_by_category
+                .entry(task.category)
+                .or_insert(0) += 1;
 
-        // Update streak
-        let today = Local::now().date_naive();
-        let last_active = self.stats.last_active_date.date_naive();
-        if today == last_active {
-            // Same day, no change
-        } else if today.signed_duration_since(last_active).num_days() == 1 {
-            self.stats.daily_streak += 1;
-        } else {
-            self.stats.daily_streak = 1;
+            let today = Local::now().date_naive();
+            let last_active = self.stats.last_active_date.date_naive();
+            if today != last_active {
+                if today.signed_duration_since(last_active).num_days() == 1 {
+                    self.stats.daily_streak += 1;
+                } else {
+                    self.stats.daily_streak = 1;
+                }
+                self.stats.last_active_date = Local::now();
+            }
         }
-        self.stats.last_active_date = Local::now();
     }
 
     pub fn toggle_selected_timer(&mut self) {
@@ -409,13 +391,15 @@ impl App {
     }
 
     fn send_notification(&self, title: &str, body: &str) {
-        if let Err(e) = notify_rust::Notification::new()
-            .summary(title)
-            .body(body)
-            .appname("kronos")
-            .show()
-        {
-            eprintln!("Failed to send notification: {}", e);
+        if self.config.features.notification_sound {
+            if let Err(e) = notify_rust::Notification::new()
+                .summary(title)
+                .body(body)
+                .appname("kronos")
+                .show()
+            {
+                eprintln!("Failed to send notification: {}", e);
+            }
         }
     }
 
@@ -423,6 +407,35 @@ impl App {
         let mut names: Vec<_> = self.presets.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    pub fn get_category_names(&self) -> Vec<String> {
+        [
+            "Work",
+            "Personal",
+            "Study",
+            "Exercise",
+            "General",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    pub fn set_task_category(&mut self, task_idx: usize, category: TaskCategory) {
+        if let Some(task) = self.tasks.get_mut(task_idx) {
+            task.category = category;
+        }
+    }
+
+    pub fn trigger_startup_animation(&mut self) {
+        self.effect_manager.add_effect(fx::sweep_in(
+            Motion::UpToDown,
+            20,
+            0,
+            self.config.theme.selection,
+            800,
+        ));
     }
 
     pub fn trigger_mode_change_effect(&mut self, area: Rect) {
@@ -442,20 +455,18 @@ impl App {
     }
 
     pub fn trigger_task_complete_celebration(&mut self, area: Rect) {
-        // Celebration animation for completing tasks
         self.effect_manager
             .add_effect(fx::fade_to_fg(self.config.theme.green, 500).with_area(area));
     }
 
     pub fn trigger_streak_animation(&mut self, area: Rect) {
-        // Use dissolve effect with color instead of hsl_shift_fg
         self.effect_manager
             .add_effect(fx::fade_to_fg(self.config.theme.magenta, 2000).with_area(area));
     }
 
     pub fn show_stats_summary(&self) -> String {
         format!(
-            "📊 Total: {} tasks | ⏱️ {} hours | 🔥 {} day streak",
+            "📊 Total: {} tasks | ⏱️  {} hours | 🔥 {} day streak",
             self.stats.total_completed,
             self.stats.total_time_worked.num_hours(),
             self.stats.daily_streak
@@ -466,13 +477,7 @@ impl App {
         let mut csv =
             String::from("Task,Category,Priority,Time Spent,Completed,Created,Completed At\n");
         for task in &self.tasks {
-            let category = match &task.category {
-                TaskCategory::Work => "Work",
-                TaskCategory::Personal => "Personal",
-                TaskCategory::Study => "Study",
-                TaskCategory::Exercise => "Exercise",
-                TaskCategory::Other(name) => name,
-            };
+            let category = task.category.to_string();
             let priority = match task.priority {
                 Priority::Low => "Low",
                 Priority::Medium => "Medium",
@@ -487,9 +492,8 @@ impl App {
                 task.timer.get_elapsed().num_minutes(),
                 task.completed,
                 task.created_at.format("%Y-%m-%d %H:%M"),
-                task.completed_at.map_or("N/A".to_string(), |d| d
-                    .format("%Y-%m-%d %H:%M")
-                    .to_string())
+                task.completed_at
+                    .map_or("N/A".to_string(), |d| d.format("%Y-%m-%d %H:%M").to_string())
             ));
         }
         Ok(csv)

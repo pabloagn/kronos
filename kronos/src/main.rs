@@ -1,4 +1,3 @@
-use tachyonfx::{fx, Motion};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -10,13 +9,15 @@ use std::{
     io::{self, Stdout},
     time::{Duration, Instant},
 };
+// Import the correct Duration type from the tachyonfx crate.
+use tachyonfx::Duration as TachyonDuration;
 
 mod app;
 mod config;
 mod persistence;
 mod ui;
 
-use app::{App, AppMode};
+use app::{App, AppMode, TaskCategory};
 use persistence::Persistence;
 use ui::UiLayout;
 
@@ -44,6 +45,7 @@ fn main() -> Result<()> {
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
     }
+
     Ok(())
 }
 
@@ -52,33 +54,24 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
     let mut last_frame_time = Instant::now();
     let mut ui_layout = UiLayout::default();
 
-    // Add startup animation here
-    if app.mode == AppMode::StartupAnimation {
-        app.effect_manager.add_effect(fx::sweep_in(
-            Motion::UpToDown,
-            20,
-            0,
-            app.config.theme.selection,
-            800,
-        ));
-        app.mode = AppMode::Normal;
-    }
-
     loop {
         let now = Instant::now();
         let delta = now.duration_since(last_frame_time);
         last_frame_time = now;
 
         terminal.draw(|f| {
-            let frame_area = f.area();
+            let frame_area = f.size();
             ui_layout = ui::draw(f, app);
+            
+            // Correctly convert std::time::Duration to tachyonfx::Duration.
+            let tachyon_delta = TachyonDuration::from_millis(delta.as_millis() as u32);
             app.effect_manager
-                .process_effects(delta.into(), f.buffer_mut(), frame_area);
+                .process_effects(tachyon_delta, f.buffer_mut(), frame_area);
         })?;
 
         app.check_and_notify_completions();
 
-        if last_save.elapsed() > Duration::from_secs(5) {
+        if last_save.elapsed() > Duration::from_secs(app.config.features.auto_save_interval) {
             if Persistence::save(app).is_ok() {
                 last_save = Instant::now();
             }
@@ -88,6 +81,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     let prev_mode = app.mode.clone();
+
                     match app.mode {
                         AppMode::Normal => match key.code {
                             KeyCode::Char('q') => app.should_quit = true,
@@ -124,6 +118,14 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
                                     app.mode = AppMode::SelectingPreset(app.selected_task);
                                 }
                             }
+                            KeyCode::Char('c') => {
+                                if !app.tasks.is_empty() {
+                                    app.mode = AppMode::SelectingCategory(app.selected_task);
+                                    app.category_list_state.select(Some(0));
+                                }
+                            }
+                            KeyCode::Char('s') => app.mode = AppMode::ShowStats,
+                            KeyCode::Char('?') => app.mode = AppMode::ShowHelp,
                             KeyCode::Char('g') => app.global_timer.toggle(),
                             KeyCode::Char('G') => {
                                 app.global_timer.reset();
@@ -131,6 +133,33 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
                             }
                             KeyCode::Up | KeyCode::Char('k') => app.move_selection_up(),
                             KeyCode::Down | KeyCode::Char('j') => app.move_selection_down(),
+                            _ => {}
+                        },
+                        AppMode::SelectingCategory(task_idx) => match key.code {
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                let category_count = app.get_category_names().len();
+                                let selected = app.category_list_state.selected().unwrap_or(0);
+                                app.category_list_state.select(Some(selected.saturating_sub(1)));
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                let category_count = app.get_category_names().len();
+                                let selected = app.category_list_state.selected().unwrap_or(0);
+                                app.category_list_state.select(Some((selected + 1).min(category_count - 1)));
+                            }
+                            KeyCode::Enter => {
+                                if let Some(selected) = app.category_list_state.selected() {
+                                    let category = match selected {
+                                        0 => TaskCategory::Work,
+                                        1 => TaskCategory::Personal,
+                                        2 => TaskCategory::Study,
+                                        3 => TaskCategory::Exercise,
+                                        _ => TaskCategory::Other("General".to_string()),
+                                    };
+                                    app.set_task_category(task_idx, category);
+                                }
+                                app.mode = AppMode::Normal;
+                            }
+                            KeyCode::Esc => app.mode = AppMode::Normal,
                             _ => {}
                         },
                         _ => match key.code {
@@ -141,16 +170,19 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
                             _ => {}
                         },
                     }
+
                     if app.mode != prev_mode {
                         app.trigger_mode_change_effect(ui_layout.status_bar);
                     }
                 }
             }
         }
+
         if app.should_quit {
             Persistence::save(app)?;
             break;
         }
     }
+
     Ok(())
 }

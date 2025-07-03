@@ -9,6 +9,29 @@ use std::fs;
 pub struct Config {
     pub theme: Theme,
     pub icons: Icons,
+    pub features: Features,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct Features {
+    pub auto_save_interval: u64,
+    pub show_seconds: bool,
+    pub notification_sound: bool,
+    pub break_reminders: bool,
+    pub daily_stats: bool,
+}
+
+impl Default for Features {
+    fn default() -> Self {
+        Self {
+            auto_save_interval: 5,
+            show_seconds: true,
+            notification_sound: true,
+            break_reminders: true,
+            daily_stats: true,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -62,6 +85,7 @@ impl Default for Config {
         Self {
             theme: Theme::default(),
             icons: Icons::default(),
+            features: Features::default(),
         }
     }
 }
@@ -92,8 +116,8 @@ impl Default for Icons {
             play: "▶".to_string(),
             pause: "⏸".to_string(),
             stop: "■".to_string(),
-            pending: "☐".to_string(),
-            done: "☑".to_string(),
+            pending: "○".to_string(),
+            done: "⌾".to_string(),
             select: "▸".to_string(),
             progress_filled: "█".to_string(),
             progress_empty: "░".to_string(),
