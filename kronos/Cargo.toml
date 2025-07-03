@@ -28,6 +28,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Persistence
 directories = "5.0"
+# persistence = "0.0.6"
 
 # Notifications
 notify-rust = "4.11"
