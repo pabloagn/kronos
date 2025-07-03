@@ -24,4 +24,10 @@ ratatui = "0.28"
 crossterm = "0.28"
 
 # Time handling
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Persistence
+directories = "5.0"
+
+# Notifications
+notify-rust = "4.11"

@@ -35,7 +35,7 @@ pub struct TimerStatus {
     pub total: u64,   // seconds
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]  // Added PartialEq here
 pub enum TimerState {
     Idle,
     Running,

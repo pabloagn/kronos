@@ -25,10 +25,11 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_tasks(f, chunks[2], app);
     draw_status_bar(f, chunks[3], app);
 
-    // Draw input overlay if in input mode
+    // Draw overlays
     match &app.mode {
         AppMode::AddingTask => draw_input_overlay(f, "New Task", &app.input_buffer),
         AppMode::EditingTime(_) => draw_input_overlay(f, "Set Timer (minutes)", &app.input_buffer),
+        AppMode::SelectingPreset(_) => draw_preset_overlay(f, app),
         _ => {}
     }
 }
@@ -53,16 +54,12 @@ fn draw_header(f: &mut Frame, area: Rect) {
 
 fn draw_global_timer(f: &mut Frame, area: Rect, app: &App) {
     let timer = &app.global_timer;
-    let elapsed = timer.get_elapsed();
     let remaining = timer.get_remaining();
     
-    let hours = elapsed.num_hours();
-    let mins = elapsed.num_minutes() % 60;
-    let secs = elapsed.num_seconds() % 60;
-    
-    let rem_hours = remaining.num_hours();
-    let rem_mins = remaining.num_minutes() % 60;
-    let rem_secs = remaining.num_seconds() % 60;
+    // Display remaining time for countdown
+    let hours = remaining.num_hours();
+    let mins = remaining.num_minutes() % 60;
+    let secs = remaining.num_seconds() % 60;
     
     let state_symbol = match timer.state {
         kronos_ipc::TimerState::Running => "▶",
@@ -76,7 +73,7 @@ fn draw_global_timer(f: &mut Frame, area: Rect, app: &App) {
         kronos_ipc::TimerState::Idle => Color::Rgb(164, 167, 164),
     };
     
-    // Split the area for timer display and progress bar
+    // Split the area
     let timer_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -93,17 +90,15 @@ fn draw_global_timer(f: &mut Frame, area: Rect, app: &App) {
             Span::raw(" ─┐"),
         ]),
         Line::from(vec![
-            Span::raw("│ "),
             Span::styled(
                 format!("{:02}:{:02}:{:02}", hours, mins, secs),
                 Style::default().fg(Color::Rgb(197, 201, 199)).add_modifier(Modifier::BOLD)
             ),
-            Span::raw(" │"),
         ]),
         Line::from(vec![
             Span::raw("└─ "),
             Span::styled(
-                format!("⏱ {:02}:{:02}:{:02}", rem_hours, rem_mins, rem_secs),
+                format!("{} min", timer.target_duration.num_minutes()),
                 Style::default().fg(Color::Rgb(122, 168, 159))
             ),
             Span::raw(" ─┘"),
@@ -125,13 +120,13 @@ fn draw_global_timer(f: &mut Frame, area: Rect, app: &App) {
     
     // Progress bar
     let progress = timer.get_progress();
-    let progress_bar = Gauge::default()
+    let gauge = Gauge::default()
         .block(Block::default().borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM))
         .gauge_style(Style::default().fg(Color::Rgb(127, 180, 202)))
         .percent((progress * 100.0) as u16)
         .label(format!("{}%", (progress * 100.0) as u16));
     
-    f.render_widget(progress_bar, timer_chunks[1]);
+    f.render_widget(gauge, timer_chunks[1]);
 }
 
 fn draw_tasks(f: &mut Frame, area: Rect, app: &App) {
@@ -151,19 +146,27 @@ fn draw_tasks(f: &mut Frame, area: Rect, app: &App) {
                 kronos_ipc::TimerState::Idle => "○",
             };
             
-            // Timer display
-            let elapsed = task.timer.get_elapsed();
-            let timer_text = format!(
-                "{:02}:{:02}",
-                elapsed.num_minutes(),
-                elapsed.num_seconds() % 60
-            );
+            // Timer display (remaining time)
+            let remaining = task.timer.get_remaining();
+            let timer_text = if task.timer.is_complete() {
+                "00:00".to_string()
+            } else {
+                format!(
+                    "{:02}:{:02}",
+                    remaining.num_minutes(),
+                    remaining.num_seconds() % 60
+                )
+            };
             
-            // Progress indicator
+            // Progress bar using block elements
             let progress = task.timer.get_progress();
-            let progress_blocks = "░▒▓█";
-            let progress_idx = ((progress * 4.0) as usize).min(3);
-            let progress_char = progress_blocks.chars().nth(progress_idx).unwrap_or('░');
+            let bar_width = 10;
+            let filled = (progress * bar_width as f64) as usize;
+            let bar = format!(
+                "{}{}",
+                "█".repeat(filled),
+                "░".repeat(bar_width - filled)
+            );
             
             // Build the line
             let mut spans = vec![
@@ -184,7 +187,7 @@ fn draw_tasks(f: &mut Frame, area: Rect, app: &App) {
             // Add timer info
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                format!("[{} {} {}]", timer_symbol, timer_text, progress_char),
+                format!("[{} {} {}]", timer_symbol, timer_text, bar),
                 Style::default().fg(Color::Rgb(122, 168, 159))
             ));
             
@@ -210,12 +213,14 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         AppMode::Normal => "NORMAL",
         AppMode::AddingTask => "INSERT",
         AppMode::EditingTime(_) => "TIME",
+        AppMode::SelectingPreset(_) => "PRESET",
     };
     
     let mode_color = match app.mode {
         AppMode::Normal => Color::Rgb(122, 168, 159),
         AppMode::AddingTask => Color::Rgb(230, 195, 132),
         AppMode::EditingTime(_) => Color::Rgb(127, 180, 202),
+        AppMode::SelectingPreset(_) => Color::Rgb(147, 146, 169),
     };
     
     let help_text = match app.mode {
@@ -235,9 +240,11 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
                 Span::raw(":delete "),
                 Span::styled("t", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(":time "),
+                Span::styled("p", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(":preset "),
                 Span::styled("x", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(":done "),
-                Span::styled("g", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("g/G", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(":global "),
                 Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(":quit"),
@@ -292,6 +299,48 @@ fn draw_input_overlay(f: &mut Frame, title: &str, input: &str) {
     );
     
     f.render_widget(input_widget, area);
+}
+
+fn draw_preset_overlay(f: &mut Frame, app: &App) {
+    let area = centered_rect(60, 40, f.area());
+    
+    f.render_widget(Clear, area);
+    
+    let presets = app.get_preset_names();
+    let items: Vec<ListItem> = presets
+        .iter()
+        .enumerate()
+        .map(|(idx, name)| {
+            let minutes = app.presets.get(name).unwrap_or(&0);
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{}", idx + 1),
+                    Style::default().fg(Color::Rgb(127, 180, 202)).add_modifier(Modifier::BOLD)
+                ),
+                Span::raw(". "),
+                Span::raw(name),
+                Span::raw(" ⟨"),
+                Span::styled(
+                    format!("{}m", minutes),
+                    Style::default().fg(Color::Rgb(122, 168, 159))
+                ),
+                Span::raw("⟩"),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+    
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title("⟨ Select Preset ⟩")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .border_style(Style::default().fg(Color::Rgb(147, 146, 169)))
+        );
+    
+    f.render_widget(list, area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

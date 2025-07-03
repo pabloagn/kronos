@@ -26,12 +26,6 @@ pub enum AppMode {
     SelectingPreset(usize),
 }
 
-impl Default for AppMode {
-    fn default() -> Self {
-        AppMode::Normal
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: u32,
@@ -130,7 +124,7 @@ impl Default for App {
         presets.insert("Long Break".to_string(), 15);
         presets.insert("Focus".to_string(), 45);
         presets.insert("Deep Work".to_string(), 90);
-        
+
         Self {
             tasks: vec![],
             selected_task: 0,
@@ -256,18 +250,20 @@ impl App {
 
     pub fn check_and_notify_completions(&mut self) {
         // Check global timer
-        if self.global_timer.is_complete() && 
-           self.global_timer.state == TimerState::Running &&
-           !self.notifications_sent.contains(&0) {
+        if self.global_timer.is_complete()
+            && self.global_timer.state == TimerState::Running
+            && !self.notifications_sent.contains(&0)
+        {
             self.send_notification("Global Timer", "Timer completed!");
             self.notifications_sent.push(0);
         }
 
         // Check task timers
         for task in &self.tasks {
-            if task.timer.is_complete() && 
-               task.timer.state == TimerState::Running &&
-               !self.notifications_sent.contains(&task.id) {
+            if task.timer.is_complete()
+                && task.timer.state == TimerState::Running
+                && !self.notifications_sent.contains(&task.id)
+            {
                 self.send_notification(&task.description, "Task timer completed!");
                 self.notifications_sent.push(task.id);
             }
