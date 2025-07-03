@@ -22,3 +22,6 @@ Thumbs.db
 # Project specific
 kronos.sock
 kronos.pid
+
+# Flake
+.direnv
