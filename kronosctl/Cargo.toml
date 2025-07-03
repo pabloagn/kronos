@@ -1,0 +1,21 @@
+[package]
+name = "kronosctl"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kronosctl"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+kronos-ipc.workspace = true
+
+# CLI parsing
+clap = { version = "4.5", features = ["derive"] }

@@ -1,0 +1,27 @@
+[package]
+name = "kronos"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kronos"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+kronos-ipc.workspace = true
+
+# TUI specific
+ratatui = "0.28"
+crossterm = "0.28"
+
+# Time handling
+chrono = "0.4"

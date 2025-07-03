@@ -1,0 +1,15 @@
+[package]
+name = "kronos-ipc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = [
+  "net",
+  "io-util",
+] } # Unix domain sockets for IPC
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
