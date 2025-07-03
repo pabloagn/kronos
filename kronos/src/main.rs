@@ -60,7 +60,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
         last_frame_time = now;
 
         terminal.draw(|f| {
-            let frame_area = f.size();
+            let frame_area = f.area();
             ui_layout = ui::draw(f, app);
             
             // Correctly convert std::time::Duration to tachyonfx::Duration.
@@ -96,6 +96,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
                                     if !task.completed {
                                         if let Some(rect) = ui_layout.tasks.get(app.selected_task) {
                                             app.trigger_complete_effect(*rect);
+                                            app.trigger_task_complete_celebration(*rect);
                                         }
                                     }
                                 }
@@ -137,7 +138,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
                         },
                         AppMode::SelectingCategory(task_idx) => match key.code {
                             KeyCode::Up | KeyCode::Char('k') => {
-                                let category_count = app.get_category_names().len();
+                                // let category_count = app.get_category_names().len();
                                 let selected = app.category_list_state.selected().unwrap_or(0);
                                 app.category_list_state.select(Some(selected.saturating_sub(1)));
                             }

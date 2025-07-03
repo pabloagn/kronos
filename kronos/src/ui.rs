@@ -1,4 +1,4 @@
-use crate::app::{App, AppMode, TaskCategory};
+use crate::app::{App, AppMode};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -249,7 +249,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let help = match app.mode {
-        AppMode::Normal => "a:add | d:del | x:done | t:time | p:preset | c:cat | r:reset | s:stats | ?:help | q:quit",
+        AppMode::Normal => "a:add | d:del | x:done | t:time | p:preset | c:cat | r:reset | s:stats | gG:global timer | ?:help | q:quit",
         _ => "enter:confirm | esc:cancel",
     };
 
