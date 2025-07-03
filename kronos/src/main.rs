@@ -1,35 +1,38 @@
+use tachyonfx::{fx, Motion};
 use anyhow::Result;
-use std::io;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    Terminal,
+use ratatui::{backend::CrosstermBackend, Terminal};
+use std::{
+    io::{self, Stdout},
+    time::{Duration, Instant},
 };
 
 mod app;
-mod ui;
+mod config;
 mod persistence;
+mod ui;
 
 use app::{App, AppMode};
 use persistence::Persistence;
+use ui::UiLayout;
 
 fn main() -> Result<()> {
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Load or create app
-    let app = Persistence::load()?.unwrap_or_else(App::new);
-    let res = run_app(&mut terminal, app);
+    let config = config::load_config()?;
+    let mut app = Persistence::load(&config)?.unwrap_or_else(|| App::new(config.clone()));
+    app.config = config;
 
-    // Restore terminal
+    let res = run_app(&mut terminal, &mut app);
+
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -41,33 +44,68 @@ fn main() -> Result<()> {
     if let Err(err) = res {
         eprintln!("Error: {:?}", err);
     }
-
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
-    let mut last_save = std::time::Instant::now();
-    
-    loop {
-        terminal.draw(|f| ui::draw(f, &app))?;
+fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+    let mut last_save = Instant::now();
+    let mut last_frame_time = Instant::now();
+    let mut ui_layout = UiLayout::default();
 
-        // Check for timer completions and send notifications
+    // Add startup animation here
+    if app.mode == AppMode::StartupAnimation {
+        app.effect_manager.add_effect(fx::sweep_in(
+            Motion::UpToDown,
+            20,
+            0,
+            app.config.theme.selection,
+            800,
+        ));
+        app.mode = AppMode::Normal;
+    }
+
+    loop {
+        let now = Instant::now();
+        let delta = now.duration_since(last_frame_time);
+        last_frame_time = now;
+
+        terminal.draw(|f| {
+            let frame_area = f.area();
+            ui_layout = ui::draw(f, app);
+            app.effect_manager
+                .process_effects(delta.into(), f.buffer_mut(), frame_area);
+        })?;
+
         app.check_and_notify_completions();
 
-        // Auto-save every 5 seconds
-        if last_save.elapsed().as_secs() > 5 {
-            Persistence::save(&app)?;
-            last_save = std::time::Instant::now();
+        if last_save.elapsed() > Duration::from_secs(5) {
+            if Persistence::save(app).is_ok() {
+                last_save = Instant::now();
+            }
         }
 
-        if event::poll(std::time::Duration::from_millis(100))? {
+        if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
+                    let prev_mode = app.mode.clone();
                     match app.mode {
                         AppMode::Normal => match key.code {
-                            KeyCode::Char('q') => {
-                                Persistence::save(&app)?;
-                                return Ok(());
+                            KeyCode::Char('q') => app.should_quit = true,
+                            KeyCode::Char('d') => {
+                                if let Some(rect) = ui_layout.tasks.get(app.selected_task) {
+                                    app.trigger_delete_effect(*rect);
+                                }
+                                app.delete_selected_task();
+                            }
+                            KeyCode::Char('x') => {
+                                if let Some(task) = app.tasks.get(app.selected_task) {
+                                    if !task.completed {
+                                        if let Some(rect) = ui_layout.tasks.get(app.selected_task) {
+                                            app.trigger_complete_effect(*rect);
+                                        }
+                                    }
+                                }
+                                app.toggle_selected_task_completion();
                             }
                             KeyCode::Char('a') => {
                                 app.mode = AppMode::AddingTask;
@@ -75,8 +113,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
                             }
                             KeyCode::Char(' ') => app.toggle_selected_timer(),
                             KeyCode::Char('r') => app.reset_selected_timer(),
-                            KeyCode::Char('d') => app.delete_selected_task(),
-                            KeyCode::Char('x') => app.toggle_selected_task_completion(),
                             KeyCode::Char('t') => {
                                 if !app.tasks.is_empty() {
                                     app.mode = AppMode::EditingTime(app.selected_task);
@@ -97,35 +133,24 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
                             KeyCode::Down | KeyCode::Char('j') => app.move_selection_down(),
                             _ => {}
                         },
-                        AppMode::AddingTask | AppMode::EditingTime(_) => match key.code {
-                            KeyCode::Esc => {
-                                app.mode = AppMode::Normal;
-                                app.input_buffer.clear();
-                            }
+                        _ => match key.code {
                             KeyCode::Enter => app.handle_char('\n'),
+                            KeyCode::Esc => app.mode = AppMode::Normal,
                             KeyCode::Backspace => app.handle_backspace(),
                             KeyCode::Char(c) => app.handle_char(c),
                             _ => {}
                         },
-                        AppMode::SelectingPreset(task_idx) => match key.code {
-                            KeyCode::Esc => {
-                                app.mode = AppMode::Normal;
-                            }
-                            KeyCode::Char(c) if c.is_numeric() => {
-                                let num = c.to_digit(10).unwrap_or(0) as usize;
-                                if num > 0 && num <= app.presets.len() {
-                                    let preset_names = app.get_preset_names();
-                                    if let Some(preset_name) = preset_names.get(num - 1) {
-                                        app.set_task_duration_from_preset(task_idx, preset_name);
-                                        app.mode = AppMode::Normal;
-                                    }
-                                }
-                            }
-                            _ => {}
-                        },
+                    }
+                    if app.mode != prev_mode {
+                        app.trigger_mode_change_effect(ui_layout.status_bar);
                     }
                 }
             }
         }
+        if app.should_quit {
+            Persistence::save(app)?;
+            break;
+        }
     }
+    Ok(())
 }
